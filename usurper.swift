@@ -9,8 +9,6 @@
 */
 
 /**
-* Usurper detects every screenshot taken by OSX and uploads them
-* to POMF-like services as uguu.se and jii.moe.
 * https://github.com/RoxasShadow/usurper
 */
 
@@ -38,13 +36,20 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
     NSMetadataQueryDidFinishGatheringNotification
   ]
 
+  // Will be overwritten if it's been customized, anyway
   var screenshotsFolder = "~/Desktop/"
 
   enum ImageServices: String {
     case uguu = "https://www.uguu.se/api.php?d=upload-tool"
-    case じ   = "https://jii.moe/api/v1/upload"
+    case じ    = "https://jii.moe/api/v1/upload"
+    case SCP  = "user@host:my/screenshots/folder"
   }
+
+  // The image service that will be used
   let imageService = ImageServices.uguu
+
+  // The direct URL to the screenshot uploaded with SCP
+  let SCPPrefix = "http://my.screenshots.com/folder/"
 
   // https://gist.github.com/rsattar/ed74982428003db8e875
   func swizzleToReturnANonEmptyBundleIdentifier() -> Bool {
@@ -113,8 +118,8 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
   private func screenshotTaken(filename: String) {
     let path = NSString(string: screenshotsFolder + filename).stringByExpandingTildeInPath
 
-    showNotification("Uploading...", filename: filename)
-    let url = uploadTo(imageService.rawValue, file: path)
+    showNotification("Uploading to \(imageService)...", filename: filename)
+    let url = uploadTo(imageService.rawValue, file: path, filename: filename)
     copyToPasteboard(url)
     showNotification("The URL has been copied into the clipboard", filename: filename)
   }
@@ -134,16 +139,31 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
   private func showNotification(message: String, filename: String) {
     let notification = NSUserNotification()
     notification.identifier = "\(NSDate().timeIntervalSince1970)"
-    notification.title      = "\(imageService)"
-    notification.subtitle   = filename
-    notification.informativeText = message
+    notification.title      = "Usurper"
+    notification.subtitle   = message
+    notification.informativeText = filename
     NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification(notification)
   }
 
   // TODO: Use a native implementation
-  private func uploadTo(endpoint: String, file: String) -> String {
-    let cmd = "curl -# --fail --form 'file=@\"\(file)\"' \(endpoint)"
-    return executeCommand(cmd)
+  private func uploadTo(endpoint: String, file: String, filename: String) -> String {
+    if imageService == ImageServices.SCP {
+      let escapedFilename = filename.stringByReplacingOccurrencesOfString(" ",
+        withString: "\\ ",
+        options: NSStringCompareOptions.LiteralSearch,
+        range: nil
+      )
+
+      let finalDestination = NSString.pathWithComponents([endpoint, escapedFilename])
+
+      let cmd = "scp \"\(file)\" \"\(finalDestination)\""
+      executeCommand(cmd)
+      return SCPPrefix + filename
+    }
+    else {
+      let cmd = "curl -# --fail --form 'file=@\"\(file)\"' \"\(endpoint)\""
+      return executeCommand(cmd)
+    }
   }
 
   private func executeCommand(command: String) -> String {
