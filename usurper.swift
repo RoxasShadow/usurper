@@ -108,11 +108,32 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
         let items = metadata as! [NSMetadataItem]
         if !items.isEmpty {
           if let filename = items[0].valueForAttribute("kMDItemFSName") as? String {
-            screenshotTaken(filename)
+            screenshotTaken(normalizeScreenshotFilename(filename))
           }
         }
       }
     }
+  }
+
+  private func normalizeScreenshotFilename(filename: String) -> String {
+    let newFilename = filename.stringByReplacingOccurrencesOfString("Screen Shot", withString: "Screenshot")
+                              .stringByReplacingOccurrencesOfString(" at ", withString: " ")
+                              .stringByReplacingOccurrencesOfString("\\s",
+                                withString: "_",
+                                options: NSStringCompareOptions.RegularExpressionSearch,
+                                range: nil
+                              )
+
+    let path    = NSString(string: screenshotsFolder + filename).stringByExpandingTildeInPath
+    let newPath = NSString(string: screenshotsFolder + newFilename).stringByExpandingTildeInPath
+
+    let fileManager = NSFileManager.defaultManager()
+    do {
+      try fileManager.moveItemAtPath(path, toPath: newPath)
+    }
+    catch _ as NSError {}
+
+    return newFilename
   }
 
   private func screenshotTaken(filename: String) {
