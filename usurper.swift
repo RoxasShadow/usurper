@@ -16,9 +16,9 @@ import Cocoa
 import Foundation
 
 // https://gist.github.com/rsattar/ed74982428003db8e875
-extension NSBundle {
+extension Bundle {
   func fakeBundleIdentifier() -> NSString {
-    if self == NSBundle.mainBundle() {
+    if self == Bundle.main {
       return "dont.mind.me.totally.a.normal.bundleid"
     }
     else {
@@ -27,13 +27,35 @@ extension NSBundle {
   }
 }
 
+class UserNotificationController: NSObject, NSUserNotificationCenterDelegate {
+  static let shared = UserNotificationController()
+
+  func userNotificationCenter(_ center: NSUserNotificationCenter, didActivate notification: NSUserNotification) {
+    if let text = notification.informativeText, let url = URL(string: text) {
+      NSWorkspace.shared().open(url)
+    }
+  }
+
+  func userNotificationCenter(_ center: NSUserNotificationCenter, shouldPresent notification: NSUserNotification) -> Bool {
+    return true
+  }
+
+  public func displayNotification(message: String, filename: String) {
+    let notification = NSUserNotification()
+    notification.identifier = "\(NSDate().timeIntervalSince1970)"
+    notification.title      = "Usurper"
+    notification.subtitle   = message
+    notification.informativeText = filename
+    NSUserNotificationCenter.default.deliver(notification)
+  }
+}
+
 class Usurper: NSObject, NSMetadataQueryDelegate {
-  let center = NSNotificationCenter.defaultCenter()
   let query  = NSMetadataQuery()
   let events = [
-    NSMetadataQueryDidStartGatheringNotification,
-    NSMetadataQueryDidUpdateNotification,
-    NSMetadataQueryDidFinishGatheringNotification
+    NSNotification.Name.NSMetadataQueryDidStartGathering,
+    NSNotification.Name.NSMetadataQueryDidUpdate,
+    NSNotification.Name.NSMetadataQueryDidFinishGathering
   ]
 
   // Will be overwritten if it's been customized, anyway
@@ -41,12 +63,12 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
 
   enum ImageServices: String {
     case uguu = "https://www.uguu.se/api.php?d=upload-tool"
-    case じ    = "https://jii.moe/api/v1/upload"
+    case じ   = "https://jii.moe/api/v1/upload"
     case SCP  = "user@host:my/screenshots/folder"
   }
 
   // The image service that will be used
-  let imageService = ImageServices.uguu
+  let imageService = ImageServices.SCP
 
   // The direct URL to the screenshot uploaded with SCP
   let SCPPrefix = "http://my.screenshots.com/folder/"
@@ -55,8 +77,8 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
   func swizzleToReturnANonEmptyBundleIdentifier() -> Bool {
     if let aClass = objc_getClass("NSBundle") as? AnyClass {
       method_exchangeImplementations(
-        class_getInstanceMethod(aClass, Selector("bundleIdentifier")),
-        class_getInstanceMethod(aClass, #selector(NSBundle.fakeBundleIdentifier))
+        class_getInstanceMethod(aClass, #selector(getter: Bundle.bundleIdentifier)),
+        class_getInstanceMethod(aClass, #selector(Bundle.fakeBundleIdentifier))
       )
       return true
     }
@@ -67,12 +89,12 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
     super.init()
 
     // https://gist.github.com/rsattar/ed74982428003db8e875
-    swizzleToReturnANonEmptyBundleIdentifier()
+    let _ = swizzleToReturnANonEmptyBundleIdentifier()
 
     setCustomScreenshotsFolder()
 
     for event in events {
-      center.addObserver(
+      NotificationCenter.default.addObserver(
         self,
         selector: #selector(queryUpdated),
         name:   event,
@@ -87,19 +109,19 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
   deinit { plsStop() }
 
   func plsGo() {
-    query.startQuery()
+    query.start()
   }
 
   func plsStop()  {
     for event in events {
-      center.removeObserver(
+      NotificationCenter.default.removeObserver(
         self,
         name: event,
         object: query
       )
     }
 
-    query.stopQuery()
+    query.stop()
   }
 
   @objc private func queryUpdated(notification: NSNotification) {
@@ -107,8 +129,8 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
       for metadata in userInfo.values {
         let items = metadata as! [NSMetadataItem]
         if !items.isEmpty {
-          if let filename = items[0].valueForAttribute("kMDItemFSName") as? String {
-            screenshotTaken(normalizeScreenshotFilename(filename))
+          if let filename = items[0].value(forAttribute: "kMDItemFSName") as? String {
+            screenshotTaken(filename: normalizeScreenshotFilename(filename: filename))
           }
         }
       }
@@ -116,20 +138,18 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
   }
 
   private func normalizeScreenshotFilename(filename: String) -> String {
-    let newFilename = filename.stringByReplacingOccurrencesOfString("Screen Shot", withString: "Screenshot")
-                              .stringByReplacingOccurrencesOfString(" at ", withString: " ")
-                              .stringByReplacingOccurrencesOfString("\\s",
-                                withString: "_",
-                                options: NSStringCompareOptions.RegularExpressionSearch,
+    let newFilename = filename.replacingOccurrences(of: "Screen Shot", with: "Screenshot")
+                              .replacingOccurrences(of: " at ", with: " ")
+                              .replacingOccurrences(of: "\\s", with: "_",
+                                options: .regularExpression,
                                 range: nil
                               )
 
-    let path    = NSString(string: screenshotsFolder + filename).stringByExpandingTildeInPath
-    let newPath = NSString(string: screenshotsFolder + newFilename).stringByExpandingTildeInPath
+    let path    = NSString(string: screenshotsFolder + filename).expandingTildeInPath
+    let newPath = NSString(string: screenshotsFolder + newFilename).expandingTildeInPath
 
-    let fileManager = NSFileManager.defaultManager()
     do {
-      try fileManager.moveItemAtPath(path, toPath: newPath)
+      try FileManager.default.moveItem(atPath: path, toPath: newPath)
     }
     catch _ as NSError {}
 
@@ -137,67 +157,57 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
   }
 
   private func screenshotTaken(filename: String) {
-    let path = NSString(string: screenshotsFolder + filename).stringByExpandingTildeInPath
+    let path = NSString(string: screenshotsFolder + filename).expandingTildeInPath
 
-    showNotification("Uploading to \(imageService)...", filename: filename)
-    let url = uploadTo(imageService.rawValue, file: path, filename: filename)
-    copyToPasteboard(url)
-    showNotification("The URL has been copied into the clipboard", filename: filename)
+    UserNotificationController.shared.displayNotification(message: "Uploading to \(imageService)...", filename: filename)
+    let url = uploadTo(endpoint: imageService.rawValue, file: path, filename: filename)
+    copyToPasteboard(content: url)
+    UserNotificationController.shared.displayNotification(message: "The URL has been copied into the clipboard", filename: filename)
   }
 
   private func setCustomScreenshotsFolder() {
-    if let location = CFPreferencesCopyAppValue("location", "com.apple.screencapture") {
+    if let location = CFPreferencesCopyAppValue("location" as CFString, "com.apple.screencapture" as CFString) {
       screenshotsFolder = location as! String
     }
   }
 
   private func copyToPasteboard(content: String) {
-    let pasteboard = NSPasteboard.generalPasteboard()
+    let pasteboard = NSPasteboard.general()
     pasteboard.clearContents()
-    pasteboard.writeObjects([content])
-  }
-
-  private func showNotification(message: String, filename: String) {
-    let notification = NSUserNotification()
-    notification.identifier = "\(NSDate().timeIntervalSince1970)"
-    notification.title      = "Usurper"
-    notification.subtitle   = message
-    notification.informativeText = filename
-    NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification(notification)
+    pasteboard.writeObjects([content as NSPasteboardWriting])
   }
 
   // TODO: Use a native implementation
   private func uploadTo(endpoint: String, file: String, filename: String) -> String {
     if imageService == ImageServices.SCP {
-      let escapedFilename = filename.stringByReplacingOccurrencesOfString(" ",
-        withString: "\\ ",
-        options: NSStringCompareOptions.LiteralSearch,
+      let escapedFilename = filename.replacingOccurrences(of: " ", with: "\\ ",
+        options: NSString.CompareOptions.literal,
         range: nil
       )
 
-      let finalDestination = NSString.pathWithComponents([endpoint, escapedFilename])
+      let finalDestination = NSString.path(withComponents: [endpoint, escapedFilename])
 
       let cmd = "scp \"\(file)\" \"\(finalDestination)\""
-      executeCommand(cmd)
+      let _   = executeCommand(command: cmd)
       return SCPPrefix + filename
     }
     else {
       let cmd = "curl -# --fail --form 'file=@\"\(file)\"' \"\(endpoint)\""
-      return executeCommand(cmd)
+      return executeCommand(command: cmd)
     }
   }
 
   private func executeCommand(command: String) -> String {
-    let task = NSTask()
+    let task = Process()
     task.launchPath = "/bin/sh"
     task.arguments  = ["-c", command]
 
-    let pipe = NSPipe()
+    let pipe = Pipe()
     task.standardOutput = pipe
     task.launch()
 
     let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    let output: String = NSString(data: data, encoding: NSUTF8StringEncoding) as! String
+    let output = String(data: data, encoding: String.Encoding.utf8)!
 
     task.waitUntilExit()
     return output
@@ -207,7 +217,13 @@ class Usurper: NSObject, NSMetadataQueryDelegate {
 class AppDelegate: NSObject, NSApplicationDelegate, NSMetadataQueryDelegate {
   var usurper: Usurper!
 
-  func applicationDidFinishLaunching(aNotification: NSNotification) {
+  func applicationDidFinishLaunching(_ aNotification: Notification) {
+    NSUserNotificationCenter.default.delegate = UserNotificationController.shared
+
+    if let userNotification = aNotification.userInfo?[NSApplicationLaunchUserNotificationKey] as? NSUserNotification {
+      UserNotificationController.shared.userNotificationCenter(.default, didActivate: userNotification)
+    }
+
     usurper = Usurper()
     usurper.plsGo()
   }
@@ -217,7 +233,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMetadataQueryDelegate {
   }
 }
 
-let app        = NSApplication.sharedApplication()
+let app        = NSApplication.shared()
 let controller = AppDelegate()
 
 app.delegate = controller
